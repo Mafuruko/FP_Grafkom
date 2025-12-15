@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
+import { Reflector } from "three/examples/jsm/objects/Reflector.js";
 
 // =======================================================
 //  SETUP SCENE
@@ -13,7 +14,8 @@ const camera = new THREE.PerspectiveCamera(
     0.1,
     1000
 );
-camera.position.set(-0.5, 12.5, -1); // Posisi Start
+camera.position.set(0.8, 12, -35); // Posisi Start
+camera.rotation.y = Math.PI; // Rotasi 180 derajat
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -28,8 +30,8 @@ const doorsConfig = [
         direction: -1, // 1 atau -1 (Arah putar)
     },
     {
-        doorName: "door001_1",
-        handleName: "door001_2",
+        doorName: "door001",
+        handleName: "door001_1",
         pivot: new THREE.Vector3(-22, 0, 18.8),
         direction: -1,
     },
@@ -41,7 +43,18 @@ const doorsConfig = [
     },
 ];
 
+const switchConfig = [
+    { switchName: "saklar_depan1", targetLights: ["lampu_depan1"] },
+    { switchName: "saklar_depan2", targetLights: ["lampu_depan2"] },
+    { switchName: "saklar_dalem1", targetLights: ["lampu_dalem1A", "lampu_dalem1B"] },
+    { switchName: "saklar_dalem2", targetLights: ["lampu_dalem2"] },
+    { switchName: "saklar_KM_L", targetLights: ["lampu_KM_L"] },
+    { switchName: "saklar_KM_R", targetLights: ["lampu_KM_R"] },
+];
+
 let doorSystems = [];
+let switchSystems = [];
+let mirror; // Global variable for mirror
 
 const blocker = document.createElement("div");
 blocker.style.position = "absolute";
@@ -96,10 +109,10 @@ controls.addEventListener("unlock", () => {
 });
 
 // Lights
-const light = new THREE.DirectionalLight(0xffffff, 1);
-light.position.set(5, 10, 8);
-scene.add(light);
-const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+// const light = new THREE.DirectionalLight(0xffffff, 0.1);
+// light.position.set(5, 10, 8);
+// scene.add(light);
+const ambient = new THREE.AmbientLight(0xffffff, 0.1);
 scene.add(ambient);
 
 // =======================================================
@@ -107,12 +120,13 @@ scene.add(ambient);
 // =======================================================
 const raycaster = new THREE.Raycaster();
 const raycasterDown = new THREE.Raycaster();
+const raycasterUp = new THREE.Raycaster();
 const interactionRaycaster = new THREE.Raycaster();
 const collidableMeshList = [];
 
 const loader = new GLTFLoader();
 
-loader.load("/model10.glb", (gltf) => {
+loader.load("/model16.glb", (gltf) => {
     const model = gltf.scene;
 
     model.scale.set(0.2, 0.2, 0.2);
@@ -167,6 +181,109 @@ loader.load("/model10.glb", (gltf) => {
             console.warn(
                 `Pintu dengan nama ${config.doorName} tidak ditemukan di model!`
             );
+        }
+    });
+
+    // 3. SETUP LIGHTS UNTUK OBJEK LAMPU
+    const lampNames = [
+        "lampu_depan1",
+        "lampu_depan2",
+        "lampu_dalem1A",
+        "lampu_dalem1B",
+        "lampu_dalem2",
+        "lampu_KM_L",
+        "lampu_KM_R"
+    ];
+
+    lampNames.forEach((name) => {
+        const lampObject = model.getObjectByName(name);
+
+        if (lampObject) {
+            // Pasang PointLight
+            const light = new THREE.PointLight(0xe3dac9, 10, 40, 1); // Warna emas, intensity 5, distance 20
+            light.position.set(0, -1, 0); // Di tengah object
+            lampObject.add(light);
+
+            // Buat materialnya menyala (emissive)
+            if (lampObject.isMesh) {
+                lampObject.material = lampObject.material.clone();
+                lampObject.material.emissive.set(0xe3dac9);
+                lampObject.material.emissiveIntensity = 3;
+            }
+
+            console.log(`[LAMP] Light added to ${name}`);
+        } else {
+            console.warn(`[LAMP] Object ${name} not found!`);
+        }
+    });
+
+    // 4. SETUP CERMIN (REFLECTOR) UNTUK OBJEK "Plane"
+    const mirrorObj = model.getObjectByName("mirror");
+    if (mirrorObj) {
+        // Kita butuh geometry-nya
+        const mirrorGeo = mirrorObj.geometry.clone(); // Clone biar aman
+
+        // Buat Reflector
+        mirror = new Reflector(mirrorGeo, {
+            clipBias: 0.003,
+            textureWidth: window.innerWidth * window.devicePixelRatio * 0.5,
+            textureHeight: window.innerHeight * window.devicePixelRatio * 0.5,
+            color: 0x777777
+        });
+
+        // Samakan transform (posisi, rotasi, scale) dengan objek asli
+        mirror.position.copy(mirrorObj.position);
+        mirror.rotation.copy(mirrorObj.rotation);
+
+        // KOREKSI ARAH: User bilang muka cermin arah Z negatif.
+        // Reflector Three.js biasanya menghadap Z positif. 
+        // Jadi kita putar 180 derajat (PI) di sumbu Y agar pas.
+        mirror.rotateY(Math.PI);
+
+        mirror.scale.copy(mirrorObj.scale);
+
+        // Jika objek asli ada di dalam parent (bukan langsung root model), kita harus attach ke parent yang sama
+        // Tapi karena kita pakai `model.getObjectByName`, posisi relatifnya mungkin perlu diperhatikan.
+        // Cara paling aman: masukkan mirror ke parent dari mirrorObj, lalu sembunyikan mirrorObj.
+
+        if (mirrorObj.parent) {
+            mirrorObj.parent.add(mirror);
+        } else {
+            // Kalau tidak punya parent (jarang terjadi di gltf loaded scene kecuali root), add ke model
+            model.add(mirror);
+        }
+
+        // Sembunyikan objek asli (jangan dihapus biar tidak error kalau ada referensi lain)
+        mirrorObj.visible = false;
+
+        console.log("[MIRROR] Cermin berhasil dipasang pada 'Plane'");
+
+    } else {
+        console.warn("[MIRROR] Object 'Plane' tidak ditemukan!");
+    }
+
+    // 6. SETUP SWITCHES
+    switchConfig.forEach((cfg) => {
+        const switchObj = model.getObjectByName(cfg.switchName);
+        if (switchObj) {
+            // Find target lights
+            const targets = [];
+            cfg.targetLights.forEach((tName) => {
+                const tObj = model.getObjectByName(tName);
+                if (tObj) targets.push(tObj);
+                else console.warn(`[SWITCH] Target light ${tName} not found!`);
+            });
+
+            if (targets.length > 0) {
+                switchSystems.push({
+                    switchMesh: switchObj,
+                    targets: targets,
+                    isOn: true // Default on
+                });
+                console.log(`[SWITCH] Setup ${cfg.switchName} -> ${cfg.targetLights.join(", ")}`);
+            }
+        } else {
+            console.warn(`[SWITCH] Saklar ${cfg.switchName} tidak ditemukan!`);
         }
     });
 });
@@ -262,6 +379,15 @@ function updateCameraMovement(delta) {
         }
     } else canJump = false;
 
+    // CEILING COLLISION
+    if (verticalVelocity > 0) {
+        raycasterUp.set(camera.position, new THREE.Vector3(0, 1, 0));
+        const ceiling = raycasterUp.intersectObjects(collidableMeshList, true);
+        if (ceiling.length > 0 && ceiling[0].distance < 2) {
+            verticalVelocity = 0;
+        }
+    }
+
     if (moveState.jump && canJump) {
         verticalVelocity = jumpStrength;
         canJump = false;
@@ -282,6 +408,20 @@ function animate() {
 
     if (controls.isLocked) updateCameraMovement(delta);
 
+    // --- MIRROR FRUSTUM CULLING CHECK ---
+    if (mirror) {
+        const frustum = new THREE.Frustum();
+        const matrix = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+        frustum.setFromProjectionMatrix(matrix);
+
+        // Cek bounding sphere/box. Reflector punya geometry.
+        if (!frustum.intersectsObject(mirror)) {
+            mirror.visible = false;
+        } else {
+            mirror.visible = true;
+        }
+    }
+
     // --- INTERAKSI VISUAL (Nama Target) ---
     const lookDir = new THREE.Vector3();
     camera.getWorldDirection(lookDir);
@@ -298,15 +438,17 @@ function animate() {
         const hitDist = intersects[0].distance;
 
         // Cek apakah objek yang dilihat adalah bagian dari SALAH SATU sistem pintu
-        // Kita cari di array doorSystems
         const foundDoor = doorSystems.find((system) =>
             system.meshes.includes(hitObj)
         );
 
+        // Cek apakah objek adalah saklar
+        const foundSwitch = switchSystems.find((s) => s.switchMesh === hitObj);
+
         if (foundDoor && hitDist <= 6) {
-            targetText = `[E] ${foundDoor.isOpen ? "Tutup" : "Buka"} ${
-                foundDoor.id
-            }`;
+            targetText = `[E] ${foundDoor.isOpen ? "Tutup" : "Buka"} ${foundDoor.id}`;
+        } else if (foundSwitch && hitDist <= 6) {
+            targetText = `[E] ${foundSwitch.isOn ? "Matikan" : "Nyalakan"} Lampu`;
         } else if (hitDist < 50) {
             targetText = hitObj.name;
         }
@@ -353,10 +495,12 @@ window.addEventListener("keydown", (e) => {
 
             if (hitDist <= 7.0) {
                 // Cari pintu mana yang sedang dilihat
-                // Logic: Apakah objek yang kena raycaster ada di daftar meshes milik pintu X?
                 const targetDoor = doorSystems.find((system) =>
                     system.meshes.includes(hitObj)
                 );
+
+                // Cari saklar
+                const targetSwitch = switchSystems.find((s) => s.switchMesh === hitObj);
 
                 if (targetDoor) {
                     // Toggle status pintu TERSEBUT
@@ -370,6 +514,35 @@ window.addEventListener("keydown", (e) => {
                     } else {
                         targetDoor.targetRot = targetDoor.initialRot;
                     }
+                } else if (targetSwitch) {
+                    // TOGGLE SWITCH
+                    targetSwitch.isOn = !targetSwitch.isOn;
+                    // Update Lights
+                    targetSwitch.targets.forEach(t => {
+                        // Jika target adalah Light (PointLight/SpotLight)
+                        if (t.isLight) {
+                            if (!t.userData.originalIntensity) t.userData.originalIntensity = t.intensity;
+
+                            t.intensity = targetSwitch.isOn ? t.userData.originalIntensity : 0;
+                            // Jangan ubah visible, biar shader tidak recompile
+                        }
+                        // Jika target adalah Mesh (ada material emissive)
+                        if (t.isMesh) {
+                            // Kita asumsi material sudah di-clone saat setup
+                            if (targetSwitch.isOn) {
+                                t.material.emissiveIntensity = 3; // Balikin ke terang
+                            } else {
+                                t.material.emissiveIntensity = 0; // Gelap
+                            }
+                        }
+
+                        t.children.forEach(child => {
+                            if (child.isLight) {
+                                if (!child.userData.originalIntensity) child.userData.originalIntensity = child.intensity;
+                                child.intensity = targetSwitch.isOn ? child.userData.originalIntensity : 0;
+                            }
+                        });
+                    });
                 }
             }
         }
